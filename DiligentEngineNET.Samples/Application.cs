@@ -18,12 +18,14 @@ public enum GraphicsBackend
 public abstract unsafe class Application(GraphicsBackend graphicsBackend)
 {
     private SDL_Window* _window;
+    private IEngineFactory? _engineFactory;
     private IRenderDevice? _renderDevice;
     private IDeviceContext? _immediateContext;
     private IDeviceContext[] _deferredDevices = [];
     private ISwapChain? _swapChain;
 
-    protected IRenderDevice RenderDevice => _renderDevice ?? throw new NullReferenceException();
+    protected IEngineFactory EngineFactory => _engineFactory ?? throw new NullReferenceException();
+    protected IRenderDevice Device => _renderDevice ?? throw new NullReferenceException();
     protected IDeviceContext ImmediateContext => _immediateContext ?? throw new NullReferenceException();
     protected ISwapChain SwapChain => _swapChain ?? throw new NullReferenceException();
 
@@ -37,7 +39,7 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             return new Size(x, y);
         }
     }
-
+    
     public void Setup()
     {
         SetupSDL();
@@ -48,20 +50,35 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
     public void Run()
     {
         var stop = false;
+
+        Console.CancelKeyPress += (_, _) => stop = true;
+        
         var stopWatch = Stopwatch.StartNew();
+        var prevElapsed = 0L;
+        var ratio = 1 / 1000.0;
         while (!stop)
         {
+            var elapsed = stopWatch.ElapsedMilliseconds;
+            var dt = (elapsed - prevElapsed) * ratio;
+            prevElapsed = elapsed;
+            
             SDL_Event evt;
             while (SDL3.SDL_PollEvent(&evt))
             {
                 if (evt.type == (uint)SDL_EventType.SDL_EVENT_QUIT)
                     stop = true;
+                else if (evt.type == (uint)SDL_EventType.SDL_EVENT_WINDOW_RESIZED)
+                {
+                    var windowSize = WindowSize;
+                    SwapChain.Resize((uint)windowSize.Width, (uint)windowSize.Height);
+                }
             }
 
-            OnUpdate(stopWatch.Elapsed.TotalSeconds);
-            stopWatch.Restart();
+            OnUpdate(dt);
         }
 
+        stopWatch.Stop();
+        
         OnExit();
         ReleaseDiligentObjects();
 
@@ -71,7 +88,7 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
 
     private void SetupSDL()
     {
-        if (!SDL3.SDL_Init(0))
+        if (!SDL3.SDL_Init(SDL_InitFlags.SDL_INIT_VIDEO))
             throw new Exception("Failed to initialize SDL");
 
         _window = SDL3.SDL_CreateWindow("Diligent Engine .NET - Samples", 500, 500,
@@ -104,15 +121,16 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             var engineFactory = DiligentCore.GetEngineFactoryD3D11();
             if (engineFactory is null)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryD3D11)}");
-
+            engineFactory.SetMessageCallback(OnMessageCallback);
+            
             var createInfo = new EngineD3D11CreateInfo()
             {
                 EnableValidation = true,
                 GraphicsAPIVersion = new Version(11, 0),
-                NumImmediateContexts = 1
             };
             OnSetupEngineCreateInfo(createInfo);
             var (renderDevice, deviceContexts) = engineFactory.CreateDeviceAndContexts(createInfo);
+            _engineFactory = engineFactory;
             _immediateContext = deviceContexts[0];
             _deferredDevices = deviceContexts.Skip(1).ToArray();
             _renderDevice = renderDevice;
@@ -140,15 +158,16 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             var engineFactory = DiligentCore.GetEngineFactoryD3D12();
             if(engineFactory is null)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryD3D12)}");
-            
+            engineFactory.SetMessageCallback(OnMessageCallback);
             engineFactory.LoadD3D12();
+            
             var createInfo = new EngineD3D12CreateInfo()
             {
                 EnableValidation = true,
-                NumImmediateContexts = 1,
             };
             OnSetupEngineCreateInfo(createInfo);
-            var (renderDevice, deviceContexts) = engineFactory.CreateDeviceAndContext(createInfo);
+            var (renderDevice, deviceContexts) = engineFactory.CreateDeviceAndContexts(createInfo);
+            _engineFactory = engineFactory;
             _immediateContext = deviceContexts[0];
             _deferredDevices = deviceContexts.Skip(1).ToArray();
             _renderDevice = renderDevice;
@@ -176,15 +195,16 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             var engineFactory = DiligentCore.GetEngineFactoryVk();
             if(engineFactory is null)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryVk)}");
-
+            engineFactory.SetMessageCallback(OnMessageCallback);
+            
             var createInfo = new EngineVkCreateInfo()
             {
                 EnableValidation = true,
-                NumImmediateContexts = 1,
             };
             OnSetupEngineCreateInfo(createInfo);
             
             var (renderDevice, deviceContexts) = engineFactory.CreateDeviceAndContexts(createInfo);
+            _engineFactory = engineFactory;
             _immediateContext = deviceContexts[0];
             _deferredDevices = deviceContexts.Skip(1).ToArray();
             _renderDevice = renderDevice;
@@ -210,11 +230,11 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             var engineFactory = DiligentCore.GetEngineFactoryOpenGL();
             if(engineFactory is null)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryOpenGL)}");
+            engineFactory.SetMessageCallback(OnMessageCallback);
             
             var createInfo = new EngineOpenGlCreateInfo()
             {
                 EnableValidation = true,
-                NumImmediateContexts = 1,
                 Window = GetNativeWindowHandle()
             };
             var wndSize = WindowSize;
@@ -236,6 +256,7 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             createInfo.NumImmediateContexts = 1;
             
             var (renderDevice, immediateContext, swapChain) = engineFactory.CreateDeviceAndSwapChain(createInfo, swapChainDesc);
+            _engineFactory = engineFactory;
             _renderDevice = renderDevice;
             _immediateContext = immediateContext;
             _swapChain = swapChain;
@@ -281,4 +302,9 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
     protected abstract void OnSetup();
     protected abstract void OnUpdate(double dt);
     protected abstract void OnExit();
+    
+    private static void OnMessageCallback(DebugMessageSeverity severity, string message, string function, string file, int line)
+    {
+        Console.WriteLine($"[{severity}] {message} ({function}): {file}, {line}");
+    }
 }
