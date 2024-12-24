@@ -256,6 +256,10 @@ public class TextureArraySample(GraphicsBackend backend, uint gridSize) : Applic
             ModifyPixelBuffer((pixelBuffer, i) => pixelBuffer[i + 1] = pixelBuffer[i + 2]),
             ModifyPixelBuffer((pixelBuffer, i) => pixelBuffer[i + 2] = pixelBuffer[i]),
         };
+        // On DiligentSamples (https://github.com/DiligentGraphics/DiligentSamples/tree/master)
+        // They usually uses specific image files to made Texture Array sample.
+        // You can use same approach of diligent engine team, but i prefer to modify
+        // pixel buffer instead.
         var firstTexData = textureData[0].AsSpan();
         var secondTexData = textureData[1].AsSpan();
         var thirdTexData = textureData[2].AsSpan();
