@@ -6,6 +6,7 @@ var samplesMap = new Dictionary<string, Func<GraphicsBackend, Application>>()
     { "Triangle Sample", (backend)=> new TriangleSample(backend) },
     { "Cube Sample", (backend)=> new CubeSample(backend) },
     { "Cube Texture Sample", (backend)=> new CubeTextureSample(backend) },
+    { "Instancing Sample", (backend)=> new InstancingSample(backend, 25) },
 };
 
 Console.WriteLine("- Choose one of samples:");
