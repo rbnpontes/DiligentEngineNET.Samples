@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Numerics;
 using Diligent;
+using DiligentEngineNET.Samples.Utils;
 using SDL;
 using Version = Diligent.Version;
 
@@ -24,9 +25,12 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
     private IDeviceContext[] _deferredDevices = [];
     private ISwapChain? _swapChain;
 
+    protected List<Profiler> _profilers = new();
+
     protected IEngineFactory EngineFactory => _engineFactory ?? throw new NullReferenceException();
     protected IRenderDevice Device => _renderDevice ?? throw new NullReferenceException();
     protected IDeviceContext ImmediateContext => _immediateContext ?? throw new NullReferenceException();
+    protected IDeviceContext[] DeferredContexts => _deferredDevices ?? [];
     protected ISwapChain SwapChain => _swapChain ?? throw new NullReferenceException();
 
     public Size WindowSize
@@ -49,6 +53,12 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
 
     public void Run()
     {
+        var sdlPollProfiler = new Profiler("SDL_PollEvent");
+        var updateProfiler = new Profiler("Update");
+
+        _profilers.Add(sdlPollProfiler);
+        _profilers.Add(updateProfiler);
+
         var stop = false;
 
         Console.CancelKeyPress += (_, _) => stop = true;
@@ -56,12 +66,14 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
         var stopWatch = Stopwatch.StartNew();
         var prevElapsed = 0L;
         var ratio = 1 / 1000.0;
+
         while (!stop)
         {
             var elapsed = stopWatch.ElapsedMilliseconds;
             var dt = (elapsed - prevElapsed) * ratio;
             prevElapsed = elapsed;
-            
+
+            sdlPollProfiler.Begin();
             SDL_Event evt;
             while (SDL3.SDL_PollEvent(&evt))
             {
@@ -73,8 +85,11 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
                     SwapChain.Resize((uint)windowSize.Width, (uint)windowSize.Height);
                 }
             }
+            sdlPollProfiler.End();
 
-            OnUpdate(dt);
+			updateProfiler.Begin();
+			OnUpdate(dt);
+            updateProfiler.End();
         }
 
         stopWatch.Stop();
@@ -84,6 +99,10 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
 
         SDL3.SDL_DestroyWindow(_window);
         SDL3.SDL_Quit();
+
+        Console.WriteLine(".:: Profiler Timers ::.");
+        foreach (var profiler in _profilers)
+            Console.WriteLine(profiler);
     }
 
     private void SetupSDL()
@@ -122,11 +141,13 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             if (engineFactory is null)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryD3D11)}");
             engineFactory.SetMessageCallback(OnMessageCallback);
-            
+
+            var adapter = FindBestAdapter(engineFactory);
             var createInfo = new EngineD3D11CreateInfo()
             {
                 EnableValidation = true,
                 GraphicsAPIVersion = new Version(11, 0),
+                AdapterId = (uint)adapter,
             };
             OnSetupEngineCreateInfo(createInfo);
             var (renderDevice, deviceContexts) = engineFactory.CreateDeviceAndContexts(createInfo);
@@ -160,10 +181,13 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryD3D12)}");
             engineFactory.SetMessageCallback(OnMessageCallback);
             engineFactory.LoadD3D12();
+
+            var adapter = FindBestAdapter(engineFactory);
             
             var createInfo = new EngineD3D12CreateInfo()
             {
                 EnableValidation = true,
+                AdapterId = (uint)adapter,
             };
             OnSetupEngineCreateInfo(createInfo);
             var (renderDevice, deviceContexts) = engineFactory.CreateDeviceAndContexts(createInfo);
@@ -196,10 +220,12 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             if(engineFactory is null)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryVk)}");
             engineFactory.SetMessageCallback(OnMessageCallback);
-            
+
+            var adapter = FindBestAdapter(engineFactory);
             var createInfo = new EngineVkCreateInfo()
             {
                 EnableValidation = true,
+                AdapterId = (uint)adapter,
             };
             OnSetupEngineCreateInfo(createInfo);
             
@@ -231,10 +257,12 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
             if(engineFactory is null)
                 throw new NullReferenceException($"Failed to get {nameof(IEngineFactoryOpenGL)}");
             engineFactory.SetMessageCallback(OnMessageCallback);
-            
+
+            var adapter = FindBestAdapter(engineFactory);
             var createInfo = new EngineOpenGlCreateInfo()
             {
                 EnableValidation = true,
+                AdapterId = (uint)adapter,
                 Window = GetNativeWindowHandle()
             };
             var wndSize = WindowSize;
@@ -263,6 +291,22 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
         }
     }
 
+    private int FindBestAdapter(IEngineFactory factory)
+    {
+        var adapters = factory.EnumerateAdapters(new Version(11, 1)).Index().ToList();
+        var (adapterIdx, suitableAdapter) = adapters.FirstOrDefault(x => x.Item.Type == AdapterType.Discrete);
+
+        if (suitableAdapter is not null)
+            return adapterIdx;
+
+        (adapterIdx, suitableAdapter) = adapters.FirstOrDefault(x => x.Item.Type == AdapterType.Integrated);
+        if(suitableAdapter is not null)
+            return adapterIdx;
+
+        (adapterIdx, suitableAdapter) = adapters.FirstOrDefault();
+        return suitableAdapter is not null ? adapterIdx : throw new NullReferenceException("There's no graphics adapter available.");
+    }
+
     private void ReleaseDiligentObjects()
     {
         _swapChain?.Dispose();
@@ -271,6 +315,7 @@ public abstract unsafe class Application(GraphicsBackend graphicsBackend)
         _immediateContext?.Dispose();
         _renderDevice?.Dispose();
     }
+
     private WindowHandle GetNativeWindowHandle()
     {
         var props = SDL3.SDL_GetWindowProperties(_window);

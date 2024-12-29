@@ -1,5 +1,5 @@
-Texture2D g_texture;
-SamplerState g_texture_sampler;
+Texture2D       g_texture;
+SamplerState    g_texture_sampler;
 
 struct PSInput
 {
